@@ -13,12 +13,28 @@ interface Product {
   quantity_in_stock: number;
 }
 
+const MIN_QUANTITY = 0.01;
+
 interface CartItem {
   product_id: number;
   name: string;
   selling_price: number;
   quantity: number;
   quantity_in_stock: number;
+}
+
+/** Format number for display: 10.5 not 10.50, 10 not 10.00 */
+function formatStock(value: number): string {
+  if (value == null || Number.isNaN(value)) return '0';
+  const n = Number(value);
+  return n % 1 === 0 ? String(Math.round(n)) : String(n);
+}
+
+/** Clamp quantity to valid range [MIN_QUANTITY, quantityInStock] */
+function clampQuantity(qty: number, quantityInStock: number): number {
+  const n = Number(qty);
+  if (Number.isNaN(n) || n < MIN_QUANTITY) return MIN_QUANTITY;
+  return Math.min(Math.max(MIN_QUANTITY, n), quantityInStock);
 }
 
 interface Customer {
@@ -59,6 +75,8 @@ export default function POSPage() {
   const [customerSearchQuery, setCustomerSearchQuery] = useState('');
   const [discountAmount, setDiscountAmount] = useState<number>(0);
   const [amountPaid, setAmountPaid] = useState<number>(0);
+  /** Free-typing quantity per product: while editing we show raw string, on blur we validate and commit */
+  const [editingQty, setEditingQty] = useState<Record<number, string>>({});
 
   // Payments History tab state
   const [sales, setSales] = useState<SaleRecord[]>([]);
@@ -72,7 +90,19 @@ export default function POSPage() {
     if (savedState) {
       try {
         const state = JSON.parse(savedState);
-        setCart(state.cart || []);
+        const savedCart = state.cart || [];
+        setCart(
+          savedCart.map((i: any) => {
+            let qty = Number(i.quantity) || MIN_QUANTITY;
+            if (i.portion === 'half') qty = Math.floor(qty) + 0.5;
+            else if (i.portion === 'quarter') qty = Math.floor(qty) + 0.25;
+            const { portion: _p, ...rest } = i;
+            return {
+              ...rest,
+              quantity: clampQuantity(qty, i.quantity_in_stock ?? 0),
+            } as CartItem;
+          })
+        );
         setDiscountAmount(state.discountAmount || 0);
         setNotes(state.notes || '');
         setSelectedCustomerId(state.selectedCustomerId || '');
@@ -100,7 +130,7 @@ export default function POSPage() {
             name: p.name,
             category_name: p.category_name,
             selling_price: parseFloat(p.selling_price),
-            quantity_in_stock: p.quantity_in_stock,
+            quantity_in_stock: parseFloat(p.quantity_in_stock) ?? 0,
           }))
         );
         setCustomers(custRes.data);
@@ -163,7 +193,7 @@ export default function POSPage() {
   };
 
   const addToCart = (product: Product) => {
-    if (product.quantity_in_stock === 0) {
+    if (product.quantity_in_stock <= 0) {
       setError(`"${product.name}" is out of stock.`);
       return;
     }
@@ -172,11 +202,13 @@ export default function POSPage() {
       const found = curr.find((item) => item.product_id === product.id);
       if (found) {
         if (found.quantity >= product.quantity_in_stock) {
-          setError(`Max stock for "${product.name}" is ${product.quantity_in_stock}.`);
+          setError(`Max stock for "${product.name}" is ${formatStock(product.quantity_in_stock)}.`);
           return curr;
         }
         return curr.map((item) =>
-          item.product_id === product.id ? { ...item, quantity: item.quantity + 1 } : item
+          item.product_id === product.id
+            ? { ...item, quantity: Math.min(product.quantity_in_stock, item.quantity + 1) }
+            : item
         );
       }
       return [
@@ -196,29 +228,42 @@ export default function POSPage() {
     setCart((curr) =>
       curr.map((item) => {
         if (item.product_id !== productId) return item;
-        const newQty = Math.max(1, Math.min(item.quantity_in_stock, item.quantity + delta));
+        const newQty = clampQuantity(item.quantity + delta, item.quantity_in_stock);
         return { ...item, quantity: newQty };
       })
     );
   };
 
   const setQuantity = (productId: number, qty: number) => {
-    const num = parseInt(String(qty), 10);
-    if (isNaN(num) || num < 1) return;
     setCart((curr) =>
-      curr.map((item) =>
-        item.product_id === productId
-          ? { ...item, quantity: Math.min(item.quantity_in_stock, num) }
-          : item
-      )
+      curr.map((item) => {
+        if (item.product_id !== productId) return item;
+        const val = clampQuantity(qty, item.quantity_in_stock);
+        return { ...item, quantity: val };
+      })
     );
+  };
+
+  const commitQtyInput = (productId: number, raw: string, quantityInStock: number) => {
+    const trimmed = raw.trim();
+    const num = trimmed === '' ? NaN : parseFloat(trimmed);
+    const valid = !Number.isNaN(num) && num >= MIN_QUANTITY && num <= quantityInStock;
+    setQuantity(productId, valid ? num : MIN_QUANTITY);
+    setEditingQty((prev) => {
+      const next = { ...prev };
+      delete next[productId];
+      return next;
+    });
   };
 
   const removeFromCart = (productId: number) => {
     setCart((curr) => curr.filter((item) => item.product_id !== productId));
   };
 
-  const totalPrice = cart.reduce((acc, item) => acc + item.selling_price * item.quantity, 0);
+  const totalPrice = cart.reduce(
+    (acc, item) => acc + item.selling_price * item.quantity,
+    0
+  );
   const discountedTotal = Math.max(0, totalPrice - discountAmount);
 
   const printInvoice = (
@@ -229,18 +274,24 @@ export default function POSPage() {
     method: string,
     paidAmount?: number
   ) => {
-    const rawTotal = cartItems.reduce((acc, i) => acc + i.selling_price * i.quantity, 0);
+    const rawTotal = cartItems.reduce(
+      (acc, i) => acc + i.selling_price * i.quantity,
+      0
+    );
     const finalTotal = rawTotal - discount;
     const itemsHtml = cartItems
       .map(
-        (item) => `
+        (item) => {
+          const lineTotal = item.selling_price * item.quantity;
+          return `
       <tr>
         <td>${item.name}</td>
-        <td style="text-align:center;">${item.quantity}</td>
+        <td style="text-align:center;">${formatStock(item.quantity)}</td>
         <td style="text-align:right;">${item.selling_price.toLocaleString()} TZS</td>
-        <td style="text-align:right;">${(item.selling_price * item.quantity).toLocaleString()} TZS</td>
+        <td style="text-align:right;">${lineTotal.toLocaleString()} TZS</td>
       </tr>
-    `
+    `;
+        }
       )
       .join('');
 
@@ -319,8 +370,22 @@ export default function POSPage() {
     setError(null);
     setSuccessMsg(null);
     try {
+      // Resolve any in-progress quantity edits: validate and clamp
+      const resolvedItems = cart.map((i) => {
+        const raw = editingQty[i.product_id];
+        const qty =
+          raw != null && String(raw).trim() !== ''
+            ? parseFloat(String(raw).trim()) || MIN_QUANTITY
+            : i.quantity;
+        return { ...i, quantity: clampQuantity(qty, i.quantity_in_stock) };
+      });
+      setEditingQty({});
+
       const payload: any = {
-        items: cart.map((i) => ({ product_id: i.product_id, quantity: i.quantity })),
+        items: resolvedItems.map((i) => ({
+          product_id: i.product_id,
+          quantity: i.quantity,
+        })),
         payment_method: paymentMethod,
         amount_paid: amt,
         discount_amount: discountAmount,
@@ -341,7 +406,7 @@ export default function POSPage() {
       );
       printInvoice(
         { id: res.data.id },
-        cart,
+        resolvedItems,
         customers.find((c) => c.id === selectedCustomerId),
         discountAmount,
         paymentMethod,
@@ -445,7 +510,7 @@ export default function POSPage() {
                   <span
                     className={`mt-0.5 text-xs ${lowStock ? 'text-warning-600 dark:text-warning-400' : 'text-gray-500 dark:text-gray-400'} ${outOfStock ? 'text-error-600 dark:text-error-400' : ''}`}
                   >
-                    Stock: {product.quantity_in_stock}
+                    Stock: {formatStock(product.quantity_in_stock)}
                   </span>
                 </button>
               );
@@ -553,29 +618,45 @@ export default function POSPage() {
                         {item.name}
                       </p>
                       <p className="text-[10px] text-gray-500 dark:text-gray-400">
-                        {item.selling_price.toLocaleString()} × {item.quantity} = <span className="font-semibold text-brand-600 dark:text-brand-400">{(item.selling_price * item.quantity).toLocaleString()} TZS</span>
+                        {item.selling_price.toLocaleString()} × {formatStock(item.quantity)} ={' '}
+                        <span className="font-semibold text-brand-600 dark:text-brand-400">
+                          {(item.selling_price * item.quantity).toLocaleString()} TZS
+                        </span>
                       </p>
                     </div>
                     <div className="flex items-center gap-0.5 rounded border border-gray-200 bg-white dark:border-gray-600 dark:bg-gray-900/50 shrink-0">
                       <button
                         type="button"
-                        onClick={() => updateQuantity(item.product_id, -1)}
-                        disabled={loading || item.quantity <= 1}
+                        onClick={() => updateQuantity(item.product_id, -0.25)}
+                        disabled={loading || item.quantity <= MIN_QUANTITY}
                         className="flex h-6 w-6 items-center justify-center text-gray-600 dark:text-gray-400 disabled:opacity-40"
                       >
                         <Minus className="h-3 w-3" />
                       </button>
                       <input
-                        type="number"
-                        min={1}
-                        max={item.quantity_in_stock}
-                        value={item.quantity}
-                        onChange={(e) => setQuantity(item.product_id, parseInt(e.target.value, 10) || 1)}
-                        className="h-6 w-7 border-0 bg-transparent text-center text-[11px] font-semibold text-gray-900 dark:text-white [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                        type="text"
+                        inputMode="decimal"
+                        autoComplete="off"
+                        value={editingQty[item.product_id] ?? formatStock(item.quantity)}
+                        onFocus={() =>
+                          setEditingQty((prev) => ({ ...prev, [item.product_id]: formatStock(item.quantity) }))
+                        }
+                        onChange={(e) =>
+                          setEditingQty((prev) => ({ ...prev, [item.product_id]: e.target.value }))
+                        }
+                        onBlur={() =>
+                          commitQtyInput(item.product_id, editingQty[item.product_id] ?? '', item.quantity_in_stock)
+                        }
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            (e.target as HTMLInputElement).blur();
+                          }
+                        }}
+                        className="h-6 w-14 border-0 bg-transparent text-center text-[11px] font-semibold text-gray-900 dark:text-white"
                       />
                       <button
                         type="button"
-                        onClick={() => updateQuantity(item.product_id, 1)}
+                        onClick={() => updateQuantity(item.product_id, 0.25)}
                         disabled={loading || item.quantity >= item.quantity_in_stock}
                         className="flex h-6 w-6 items-center justify-center text-gray-600 dark:text-gray-400 disabled:opacity-40"
                       >

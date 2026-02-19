@@ -5,6 +5,8 @@ from .models import (
     Category, Customer, Refund, User, Product, StockEntry,
     Sale, SaleItem, Expense, Payment, Unit,
     Order, OrderItem, TimelineEvent, Quote, QuoteItem,
+    get_portion_factor,
+    get_effective_quantity,
 )
 from django.contrib.auth import authenticate
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -192,7 +194,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = OrderItem
-        fields = ['id', 'product', 'product_id', 'quantity', 'unit_price']
+        fields = ['id', 'product', 'product_id', 'quantity', 'unit_price', 'portion']
 
     def validate_quantity(self, value):
         if value <= 0:
@@ -586,7 +588,7 @@ class ConfirmOrderSerializer(serializers.Serializer):
         payment_method = validated_data.get('payment_method')
         amount_paid = validated_data.get('amount_paid', Decimal('0'))
 
-        # Calculate totals using product prices
+        # Calculate totals using product prices and effective qty (e.g. 2 + quarter = 2.25)
         total_amount = Decimal('0')
         for item in order.items.all():
             if not item.product:
@@ -597,7 +599,9 @@ class ConfirmOrderSerializer(serializers.Serializer):
                 if order.order_type == 'wholesale'
                 else item.product.selling_price
             )
-            total_amount += price * item.quantity
+            portion = getattr(item, 'portion', 'full')
+            effective_qty = get_effective_quantity(item.quantity, portion)
+            total_amount += price * effective_qty
 
         total_amount = round_two(total_amount)
 
@@ -637,24 +641,27 @@ class ConfirmOrderSerializer(serializers.Serializer):
             is_loan=is_loan,
         )
 
-        # Create SaleItems and handle stock directly from product
+        # Create SaleItems and handle stock (effective qty e.g. 1.5, 2.25; deduct exact)
         for item in order.items.all():
             price = (
                 item.product.wholesale_price
                 if order.order_type == 'wholesale'
                 else item.product.selling_price
             )
+            portion = getattr(item, 'portion', 'full')
+            effective_qty = get_effective_quantity(item.quantity, portion)
+            line_total = round_two(price * effective_qty)
 
             SaleItem.objects.create(
                 sale=sale,
                 product=item.product,
-                quantity=item.quantity,
+                quantity=effective_qty,
                 price_per_unit=round_two(price),
-                total_price=round_two(price * item.quantity),
+                total_price=line_total,
+                portion=portion,
             )
 
-            # Deduct stock from product (no batch)
-            item.product.remove_stock(item.quantity, cashier)
+            item.product.remove_stock(effective_qty, cashier)
 
         # Record Payment if any
         if amount_paid > 0:
@@ -695,7 +702,7 @@ class RejectOrderSerializer(serializers.Serializer):
 
 class POSItemSerializer(serializers.Serializer):
     product_id = serializers.IntegerField()
-    quantity = serializers.IntegerField(min_value=1)
+    quantity = serializers.DecimalField(max_digits=20, decimal_places=2, min_value=Decimal('0.01'))
 
 
 class POSCompleteSaleSerializer(serializers.Serializer):
@@ -739,19 +746,20 @@ class POSCompleteSaleSerializer(serializers.Serializer):
                     product = Product.objects.select_for_update().get(id=item_data['product_id'])
                 except Product.DoesNotExist:
                     raise serializers.ValidationError(f"Product {item_data['product_id']} not found.")
-                qty = item_data['quantity']
-                if product.quantity_in_stock < qty:
+                effective_qty = Decimal(str(item_data['quantity']))
+                if product.quantity_in_stock < effective_qty:
                     raise serializers.ValidationError(
                         f"Insufficient stock for {product.name}. Available: {product.quantity_in_stock}"
                     )
                 price = product.wholesale_price if order_type == 'wholesale' and product.wholesale_price else product.selling_price
-                line_total = round_two(price * qty)
+                line_total = round_two(price * effective_qty)
                 total_amount += line_total
                 items_to_create.append({
-                    'product': product, 'quantity': qty,
+                    'product': product, 'quantity': effective_qty,
                     'price_per_unit': round_two(price), 'total_price': line_total,
+                    'portion': 'full',
                 })
-                products_to_deduct.append({'product': product, 'quantity': qty})
+                products_to_deduct.append({'product': product, 'quantity': effective_qty})
 
             total_amount = round_two(total_amount)
             if discount_amount > total_amount:

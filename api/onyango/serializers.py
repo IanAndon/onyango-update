@@ -211,7 +211,7 @@ class RepairJobCreateUpdateSerializer(serializers.ModelSerializer):
 # ---------- Material Request & Transfer ----------
 class MaterialRequestLineSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='product.name', read_only=True)
-    quantity_in_stock = serializers.IntegerField(source='product.quantity_in_stock', read_only=True)
+    quantity_in_stock = serializers.DecimalField(source='product.quantity_in_stock', max_digits=20, decimal_places=2, read_only=True)
     unit_price = serializers.DecimalField(source='product.buying_price', max_digits=20, decimal_places=2, read_only=True)
 
     class Meta:
@@ -240,10 +240,13 @@ class MaterialRequestSerializer(serializers.ModelSerializer):
         for line in lines_data:
             product = line.get('product')
             qty_requested = line.get('quantity_requested') or 0
-            if product and product.quantity_in_stock is not None and qty_requested > product.quantity_in_stock:
-                raise serializers.ValidationError({
-                    'lines': [f"Insufficient stock for {product.name} (in stock {product.quantity_in_stock}, requested {qty_requested})."]
-                })
+            if product and product.quantity_in_stock is not None:
+                from decimal import Decimal
+                q = Decimal(str(qty_requested))
+                if q > product.quantity_in_stock:
+                    raise serializers.ValidationError({
+                        'lines': [f"Insufficient stock for {product.name} (in stock {product.quantity_in_stock}, requested {q})."]
+                    })
         request = self.context.get('request')
         workshop = Unit.objects.filter(code='workshop').first()
         if workshop:

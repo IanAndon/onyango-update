@@ -128,39 +128,39 @@ export default function NewRepairJobPage() {
   const phone = selectedCustomer?.phone || selectedCustomer?.phone_number || "";
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-4">
+    <div className="min-w-0 space-y-4 overflow-x-hidden px-2 pb-6 sm:px-0 sm:pb-0">
+      <div className="flex flex-wrap items-center gap-2 sm:gap-4">
         <Link
           href="/onyango/repair-jobs"
-          className="inline-flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
+          className="inline-flex min-h-[44px] min-w-[44px] items-center gap-2 rounded-lg py-2 pr-3 text-sm font-medium text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white sm:min-h-0 sm:min-w-0"
         >
-          <ArrowLeft className="h-4 w-4" /> Back
+          <ArrowLeft className="h-4 w-4 shrink-0" /> Back
         </Link>
-        <h1 className="text-xl font-bold text-gray-900 dark:text-white">New repair job</h1>
+        <h1 className="text-lg font-bold text-gray-900 dark:text-white sm:text-xl">New repair job</h1>
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 lg:gap-6">
         {/* Left: Customer list + Job types */}
-        <div className="flex flex-col gap-4">
+        <div className="flex min-w-0 flex-col gap-4">
           <ContentCard
             title="Customers"
             subtitle="Search and select a customer"
-            className="flex flex-col"
+            className="flex min-h-0 flex-col"
             noPadding
           >
-            <div className="border-b border-gray-200 p-3 dark:border-gray-700">
+            <div className="border-b border-gray-200 p-2 sm:p-3 dark:border-gray-700">
               <div className="relative">
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 shrink-0 text-gray-400" />
                 <input
                   type="text"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder="Search by name, phone, email..."
-                  className="w-full rounded-lg border border-gray-300 bg-gray-50 py-2.5 pl-10 pr-3 text-sm placeholder-gray-500 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 dark:border-gray-600 dark:bg-gray-800 dark:placeholder-gray-400 dark:focus:border-brand-400 dark:focus:ring-brand-400"
+                  className="w-full min-w-0 rounded-lg border border-gray-300 bg-gray-50 py-2.5 pl-10 pr-3 text-sm placeholder-gray-500 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 dark:border-gray-600 dark:bg-gray-800 dark:placeholder-gray-400 dark:focus:border-brand-400 dark:focus:ring-brand-400"
                 />
               </div>
             </div>
-            <div className="max-h-48 flex-1 overflow-y-auto p-2">
+            <div className="max-h-40 min-h-[120px] flex-1 overflow-y-auto overflow-x-hidden p-2 sm:max-h-48">
               {loading ? (
                 <div className="flex items-center justify-center py-8">
                   <div className="h-8 w-8 animate-spin rounded-full border-2 border-brand-500 border-t-transparent" />
@@ -176,15 +176,15 @@ export default function NewRepairJobPage() {
                       <button
                         type="button"
                         onClick={() => setSelectedCustomer(c)}
-                        className={`w-full rounded-xl px-3 py-2.5 text-left text-sm transition-colors ${
+                        className={`w-full min-w-0 rounded-xl px-3 py-2.5 text-left text-sm transition-colors ${
                           selectedCustomer?.id === c.id
                             ? "bg-brand-500 text-white"
                             : "bg-gray-50 text-gray-800 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
                         }`}
                       >
-                        <span className="font-medium">{c.name}</span>
+                        <span className="block truncate font-medium">{c.name}</span>
                         {(c.phone || c.phone_number) && (
-                          <span className="ml-2 text-xs opacity-90">
+                          <span className="mt-0.5 block truncate text-xs opacity-90">
                             {c.phone || c.phone_number}
                           </span>
                         )}
@@ -200,22 +200,22 @@ export default function NewRepairJobPage() {
           <ContentCard
             title="Job types"
             subtitle={`${filteredJobTypes.length} type(s) — search and select`}
-            className="flex flex-col"
+            className="flex min-h-0 flex-col"
             noPadding
           >
-            <div className="border-b border-gray-200 p-3 dark:border-gray-700">
+            <div className="border-b border-gray-200 p-2 sm:p-3 dark:border-gray-700">
               <div className="relative">
-                <Briefcase className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                <Briefcase className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 shrink-0 text-gray-400" />
                 <input
                   type="text"
                   value={jobTypeSearch}
                   onChange={(e) => setJobTypeSearch(e.target.value)}
                   placeholder="Search by name or code..."
-                  className="w-full rounded-lg border border-gray-300 bg-gray-50 py-2.5 pl-10 pr-3 text-sm placeholder-gray-500 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 dark:border-gray-600 dark:bg-gray-800 dark:placeholder-gray-400 dark:focus:border-brand-400 dark:focus:ring-brand-400"
+                  className="w-full min-w-0 rounded-lg border border-gray-300 bg-gray-50 py-2.5 pl-10 pr-3 text-sm placeholder-gray-500 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 dark:border-gray-600 dark:bg-gray-800 dark:placeholder-gray-400 dark:focus:border-brand-400 dark:focus:ring-brand-400"
                 />
               </div>
             </div>
-            <div className="max-h-64 overflow-y-auto p-2">
+            <div className="max-h-52 overflow-y-auto overflow-x-hidden p-2 sm:max-h-64">
               {filteredJobTypes.length === 0 ? (
                 <p className="py-6 text-center text-sm text-gray-500 dark:text-gray-400">
                   {jobTypeSearch ? "No job types match your search." : "No job types loaded."}
@@ -229,20 +229,20 @@ export default function NewRepairJobPage() {
                         <button
                           type="button"
                           onClick={() => setForm((f) => ({ ...f, job_type: String(jt.id) }))}
-                          className={`w-full rounded-xl border-2 px-3 py-3 text-left text-sm transition-colors ${
+                          className={`w-full min-w-0 rounded-xl border-2 px-3 py-3 text-left text-sm transition-colors ${
                             isSelected
                               ? "border-brand-500 bg-brand-50 text-brand-800 dark:border-brand-500 dark:bg-brand-900/30 dark:text-brand-200"
                               : "border-transparent bg-gray-50 text-gray-800 hover:border-gray-200 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-200 dark:hover:border-gray-600 dark:hover:bg-gray-700"
                           }`}
                         >
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="font-semibold">{jt.name}</span>
+                          <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+                            <span className="min-w-0 flex-1 font-semibold break-words">{jt.name}</span>
                             <span className="shrink-0 tabular-nums font-medium text-gray-600 dark:text-gray-300">
                               TZS {Number(jt.fixed_price).toLocaleString()}
                             </span>
                           </div>
                           {jt.code && (
-                            <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                            <p className="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">
                               Code: {jt.code}
                             </p>
                           )}
@@ -260,11 +260,11 @@ export default function NewRepairJobPage() {
         <ContentCard
           title="Repair details"
           subtitle={selectedCustomer ? "Complete the form and create the job" : "Select a customer from the list"}
-          className="lg:max-h-[calc(100vh-12rem)] flex flex-col overflow-hidden"
+          className="flex min-w-0 flex-col overflow-visible lg:max-h-[calc(100vh-12rem)] lg:overflow-y-auto"
         >
           {selectedCustomer ? (
             <>
-              <div className="mb-6 rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800/50">
+              <div className="mb-4 rounded-xl border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800/50 sm:mb-6 sm:p-4">
                 <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
                   Selected customer
                 </p>
@@ -272,25 +272,27 @@ export default function NewRepairJobPage() {
                   <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-500/10 text-brand-600 dark:text-brand-400">
                     <User className="h-5 w-5" />
                   </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="font-semibold text-gray-900 dark:text-white">
+                  <div className="min-w-0 flex-1 overflow-hidden">
+                    <p className="truncate font-semibold text-gray-900 dark:text-white">
                       {selectedCustomer.name}
                     </p>
                     {phone && (
-                      <p className="mt-0.5 flex items-center gap-1.5 text-sm text-gray-600 dark:text-gray-300">
-                        <Phone className="h-3.5 w-3.5" /> {phone}
+                      <p className="mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden text-sm text-gray-600 dark:text-gray-300">
+                        <Phone className="h-3.5 w-3.5 shrink-0" />
+                        <span className="truncate">{phone}</span>
                       </p>
                     )}
                     {selectedCustomer.email && (
-                      <p className="mt-0.5 flex items-center gap-1.5 text-sm text-gray-600 dark:text-gray-300">
-                        <Mail className="h-3.5 w-3.5" /> {selectedCustomer.email}
+                      <p className="mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden text-sm text-gray-600 dark:text-gray-300">
+                        <Mail className="h-3.5 w-3.5 shrink-0" />
+                        <span className="truncate">{selectedCustomer.email}</span>
                       </p>
                     )}
                   </div>
                 </div>
               </div>
 
-              <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+              <form onSubmit={handleSubmit} className="flex min-w-0 flex-col gap-4">
                 <div>
                   <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
                     Job type (fixed labour price) *
@@ -309,9 +311,11 @@ export default function NewRepairJobPage() {
                     ))}
                   </select>
                   {selectedJobType && (
-                    <p className="mt-1.5 flex items-center gap-1.5 text-sm font-medium text-brand-600 dark:text-brand-400">
-                      <DollarSign className="h-4 w-4" />
-                      Full price (labour + expected materials): TZS {Number(selectedJobType.fixed_price).toLocaleString()}. When materials are requested, cashier sees the cost and grants permission; when the job is paid, materials amount goes to shop and the rest is workshop income.
+                    <p className="mt-1.5 flex flex-wrap gap-x-1.5 gap-y-0.5 text-xs font-medium text-brand-600 dark:text-brand-400 sm:text-sm">
+                      <DollarSign className="h-4 w-4 shrink-0" />
+                      <span className="break-words">
+                        Full price (labour + expected materials): TZS {Number(selectedJobType.fixed_price).toLocaleString()}. When materials are requested, cashier sees the cost and grants permission; when the job is paid, materials amount goes to shop and the rest is workshop income.
+                      </span>
                     </p>
                   )}
                 </div>
@@ -344,7 +348,7 @@ export default function NewRepairJobPage() {
                     placeholder="What is wrong?"
                   />
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div>
                     <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
                       Priority
@@ -389,18 +393,18 @@ export default function NewRepairJobPage() {
                     placeholder="Optional notes"
                   />
                 </div>
-                <div className="flex gap-3 pt-2">
+                <div className="flex flex-wrap gap-2 pt-2 sm:gap-3">
                   <button
                     type="submit"
                     disabled={submitting}
-                    className="inline-flex items-center gap-2 rounded-xl bg-brand-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-brand-600 disabled:opacity-50"
+                    className="inline-flex min-h-[44px] min-w-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-brand-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-brand-600 disabled:opacity-50 sm:flex-initial"
                   >
-                    <Wrench className="h-4 w-4" />
+                    <Wrench className="h-4 w-4 shrink-0" />
                     {submitting ? "Creating..." : "Create job"}
                   </button>
                   <Link
                     href="/onyango/repair-jobs"
-                    className="rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                    className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700 sm:flex-initial"
                   >
                     Cancel
                   </Link>
@@ -408,12 +412,12 @@ export default function NewRepairJobPage() {
               </form>
             </>
           ) : (
-            <div className="flex flex-1 flex-col items-center justify-center rounded-xl border-2 border-dashed border-gray-200 bg-gray-50/50 py-12 dark:border-gray-700 dark:bg-gray-800/30">
-              <User className="mb-3 h-12 w-12 text-gray-300 dark:text-gray-600" />
-              <p className="text-sm font-medium text-gray-500 dark:text-gray-400">
+            <div className="flex min-h-[200px] flex-1 flex-col items-center justify-center rounded-xl border-2 border-dashed border-gray-200 bg-gray-50/50 px-4 py-8 dark:border-gray-700 dark:bg-gray-800/30 sm:py-12">
+              <User className="mb-3 h-10 w-10 text-gray-300 dark:text-gray-600 sm:h-12 sm:w-12" />
+              <p className="text-center text-sm font-medium text-gray-500 dark:text-gray-400">
                 Select a customer from the list
               </p>
-              <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
+              <p className="mt-1 text-center text-xs text-gray-400 dark:text-gray-500">
                 Use the search to find a customer, then click to load the form
               </p>
             </div>

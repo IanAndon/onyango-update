@@ -847,13 +847,15 @@ class ProductViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], permission_classes=[IsAdminOrReadOnly])
     @transaction.atomic
     def update_stock(self, request, pk=None):
+        from decimal import Decimal, InvalidOperation
         product = self.get_object()
         try:
-            new_quantity = int(request.data.get('quantity'))
+            raw = request.data.get('quantity')
+            new_quantity = Decimal(str(raw)) if raw is not None else Decimal('0')
             if new_quantity < 0:
                 return Response({"detail": "Quantity cannot be negative."}, status=status.HTTP_400_BAD_REQUEST)
-        except (ValueError, TypeError):
-            return Response({"detail": "Quantity must be a valid integer."}, status=status.HTTP_400_BAD_REQUEST)
+        except (ValueError, TypeError, InvalidOperation):
+            return Response({"detail": "Quantity must be a valid number."}, status=status.HTTP_400_BAD_REQUEST)
 
         product.quantity_in_stock += new_quantity
         product.save()
@@ -864,7 +866,7 @@ class ProductViewSet(viewsets.ModelViewSet):
             quantity=new_quantity,
             recorded_by=request.user
         )
-        return Response({"detail": "Stock quantity updated.", "new_quantity": product.quantity_in_stock})
+        return Response({"detail": "Stock quantity updated.", "new_quantity": str(product.quantity_in_stock)})
 
     def perform_update(self, serializer):
         old_instance = self.get_object()
@@ -1162,28 +1164,14 @@ class SaleViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Create Refund
+        # Create Refund (model save() updates sale status, refund_total, creates Payment, returns stock)
         refund = Refund.objects.create(
             sale=sale,
             refunded_by=request.user,
             total_refund_amount=sale.paid_amount
         )
 
-        # Update sale
-        sale.status = 'refunded'
-        sale.payment_status = 'refunded'
-        sale.refund_total = (sale.refund_total or 0) + refund.total_refund_amount
-        sale.save()
-
         log_timeline('refund_created', 'refund', refund.id, f"Refund #{refund.id} - TZS {refund.total_refund_amount} for Sale #{sale.id}", user=request.user, details={'refund_id': refund.id, 'sale_id': sale.id, 'amount': str(refund.total_refund_amount)})
-
-        # Log reverse payment
-        Payment.objects.create(
-            sale=sale,
-            amount_paid=-refund.total_refund_amount,
-            cashier=request.user,
-            payment_method="refund"
-        )
 
         return Response(
             {"detail": f"Refund processed. Refunded amount: {refund.total_refund_amount} TZS"},
@@ -1643,7 +1631,8 @@ from rest_framework.response import Response
 from rest_framework import permissions
 from datetime import datetime
 from django.utils import timezone
-from .models import Sale, Expense, Refund
+from decimal import Decimal
+from .models import Sale, SaleItem, Expense, Refund
 
 class SalesReportAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -1685,16 +1674,29 @@ class SalesReportAPIView(APIView):
         ).exclude(status="refunded")
 
         # --- Aggregations ---
-        total_sales = sales_qs.aggregate(total=Sum("paid_amount"))["total"] or 0
-        total_discounts = sales_qs.aggregate(total=Sum("discount_amount"))["total"] or 0
-        total_refunds = refunds_qs.aggregate(total=Sum("total_refund_amount"))["total"] or 0
-        total_expenses = expenses_qs.aggregate(total=Sum("amount"))["total"] or 0
+        total_sales = sales_qs.aggregate(total=Sum("paid_amount"))["total"] or Decimal(0)
+        total_discounts = sales_qs.aggregate(total=Sum("discount_amount"))["total"] or Decimal(0)
+        total_refunds = refunds_qs.aggregate(total=Sum("total_refund_amount"))["total"] or Decimal(0)
+        total_expenses = expenses_qs.aggregate(total=Sum("amount"))["total"] or Decimal(0)
         total_loans = loans_qs.aggregate(
             total=Sum(F('total_amount') - F('paid_amount'))
-        )['total'] or 0
+        )['total'] or Decimal(0)
 
-        # Profit = net sales - total expenses - discounts - refunds - loans
-        profit = total_sales - total_expenses - total_discounts - total_refunds - total_loans
+        # Gross profit from confirmed sales only (refunded sales excluded).
+        # So when you refund a sale, its margin simply drops out of gross_profit — profit goes to 0 for that sale, not negative.
+        sale_items = SaleItem.objects.filter(
+            sale__in=sales_qs,
+            sale__status='confirmed'
+        ).select_related("product")
+        gross_profit = sum(
+            (si.product.selling_price - si.product.buying_price) * si.quantity
+            for si in sale_items
+        )
+        if not isinstance(gross_profit, Decimal):
+            gross_profit = Decimal(str(gross_profit))
+
+        # Profit = gross profit - discount - expenses - loans. No refund subtraction: refunded sales are already excluded from gross_profit.
+        profit = gross_profit - total_discounts - total_expenses - total_loans
 
         sales_count = sales_qs.count()
 
@@ -1705,17 +1707,17 @@ class SalesReportAPIView(APIView):
             single_date = start + timedelta(days=n)
             chart_dates.append(single_date.strftime("%Y-%m-%d"))
 
-            day_sales_raw = sales_qs.filter(day=single_date).aggregate(total=Sum("paid_amount"))["total"] or 0
-            day_discount = sales_qs.filter(day=single_date).aggregate(total=Sum("discount_amount"))["total"] or 0
-            day_refunds = refunds_qs.filter(refund_date__date=single_date).aggregate(total=Sum("total_refund_amount"))["total"] or 0
-            day_expenses = expenses_qs.filter(date=single_date).aggregate(total=Sum("amount"))["total"] or 0
-            day_loans = loans_qs.filter(day=single_date).aggregate(total=Sum(F('total_amount') - F('paid_amount')))["total"] or 0
+            day_sales_raw = sales_qs.filter(day=single_date).aggregate(total=Sum("paid_amount"))["total"] or Decimal(0)
+            day_discount = sales_qs.filter(day=single_date).aggregate(total=Sum("discount_amount"))["total"] or Decimal(0)
+            day_refunds = refunds_qs.filter(refund_date__date=single_date).aggregate(total=Sum("total_refund_amount"))["total"] or Decimal(0)
+            day_expenses = expenses_qs.filter(date=single_date).aggregate(total=Sum("amount"))["total"] or Decimal(0)
+            day_loans = loans_qs.filter(day=single_date).aggregate(total=Sum(F('total_amount') - F('paid_amount')))["total"] or Decimal(0)
 
-            chart_sales.append(day_sales_raw - day_refunds)
-            chart_expenses.append(day_expenses)
-            chart_discounts.append(day_discount)
-            chart_refunds.append(day_refunds)
-            chart_loans.append(day_loans)
+            chart_sales.append(float(day_sales_raw - day_refunds))
+            chart_expenses.append(float(day_expenses))
+            chart_discounts.append(float(day_discount))
+            chart_refunds.append(float(day_refunds))
+            chart_loans.append(float(day_loans))
 
         # --- Response ---
         data = {
@@ -1727,6 +1729,7 @@ class SalesReportAPIView(APIView):
             "total_discounts": float(total_discounts),
             "total_refunds": float(total_refunds),
             "total_loans": float(total_loans),
+            "gross_profit": float(gross_profit),
             "profit": float(profit),
             "chart": {
                 "dates": chart_dates,
@@ -1769,7 +1772,7 @@ class RecentSalesAPIView(APIView):
 
 
 # StockReportAPIView
-from django.db.models import Sum, F
+from django.db.models import Sum, F, DecimalField
 from django.db.models.functions import TruncDay, TruncWeek, TruncMonth, TruncYear, Coalesce
 from django.utils.timezone import now
 from datetime import timedelta
@@ -1808,7 +1811,7 @@ class StockReportAPIView(APIView):
 
         # --- Total stock quantity ---
         total_stock_qty = product_base_qs.aggregate(
-            total_qty=Coalesce(Sum('quantity_in_stock'), 0)
+            total_qty=Coalesce(Sum('quantity_in_stock'), 0, output_field=DecimalField(max_digits=20, decimal_places=2))
         )['total_qty']
         # --- Total stock value excluding low stock products ---
         products = product_base_qs.annotate(
@@ -1836,7 +1839,7 @@ class StockReportAPIView(APIView):
         sold_by_product = {
             row['product_id']: row['total_sold']
             for row in item_sales_qs.values('product_id').annotate(
-                total_sold=Coalesce(Sum('quantity'), 0)
+                total_sold=Coalesce(Sum('quantity'), 0, output_field=DecimalField(max_digits=20, decimal_places=2))
             )
         }
 
@@ -1862,7 +1865,7 @@ class StockReportAPIView(APIView):
             sale__status='confirmed',
             sale__date__date__range=[start_date, end_date]
         ).values('product__id', 'product__name').annotate(
-            total_sold=Coalesce(Sum('quantity'), 0)
+            total_sold=Coalesce(Sum('quantity'), 0, output_field=DecimalField(max_digits=20, decimal_places=2))
         ).order_by('-total_sold')[:10]
 
         # --- Slow movers: products with stock > 0 and no sales in range ---
@@ -1884,14 +1887,14 @@ class StockReportAPIView(APIView):
             date__date__range=[start_date, end_date],
             entry_type__in=['added', 'in']
         ).annotate(period=TruncDay('date')).values('period').annotate(
-            total=Coalesce(Sum('quantity'), 0)
+            total=Coalesce(Sum('quantity'), 0, output_field=DecimalField(max_digits=20, decimal_places=2))
         ).order_by('period')
 
         sales_qs = SaleItem.objects.filter(
             sale__status='confirmed',
             sale__date__date__range=[start_date, end_date]
         ).annotate(period=TruncDay('sale__date')).values('period').annotate(
-            total=Coalesce(Sum('quantity'), 0)
+            total=Coalesce(Sum('quantity'), 0, output_field=DecimalField(max_digits=20, decimal_places=2))
         ).order_by('period')
 
         def qs_to_dict(qs):
@@ -1911,7 +1914,7 @@ class StockReportAPIView(APIView):
             date__date__range=[start_date, end_date],
             entry_type='transferred_out'
         ).values('product__id', 'product__name').annotate(
-            total_transferred=Coalesce(Sum('quantity'), 0)
+            total_transferred=Coalesce(Sum('quantity'), 0, output_field=DecimalField(max_digits=20, decimal_places=2))
         ).order_by('-total_transferred')
 
         # --- Response ---
@@ -1952,7 +1955,8 @@ from rest_framework.permissions import IsAuthenticated
 from django.db.models import Sum, Count, DecimalField
 
 #Short report view
-from django.db.models import Sum, Count, DecimalField
+from decimal import Decimal
+from django.db.models import Sum, Count, DecimalField, F
 from django.utils.timezone import now, make_aware
 from django.db.models.functions import TruncDate
 from rest_framework.views import APIView
@@ -2015,6 +2019,25 @@ class ShortReportAPIView(APIView):
         )
         expenses_dict = {item['date']: item['total_expenses'] for item in expenses_summary}
 
+        # Loan amount per day (only is_loan=True sales, same as sales report)
+        loans_qs = Sale.objects.filter(
+            date__range=(start_date, end_date),
+            is_loan=True,
+        ).exclude(status='refunded')
+        if user.role == 'cashier':
+            loans_qs = loans_qs.filter(user=user)
+        loans_summary = (
+            loans_qs.annotate(day=TruncDate('date'))
+            .values('day')
+            .annotate(
+                loan_amount=Sum(F('total_amount') - F('paid_amount'), output_field=DecimalField())
+            )
+        )
+        loans_dict = {}
+        for item in loans_summary:
+            d = item['day'].date() if hasattr(item['day'], 'date') else item['day']
+            loans_dict[d] = item['loan_amount'] or 0
+
         report = []
         grand_totals = {
             "total_sales": Decimal(0),
@@ -2034,13 +2057,14 @@ class ShortReportAPIView(APIView):
             total_refunds = Decimal(item['total_refunds'] or 0)
             total_expenses = Decimal(expenses_dict.get(date, 0))
 
-            # Loan amount = total amount - paid amount
-            loan_amount = total_amount - total_sales
+            # Loan amount = unpaid from is_loan=True sales only (align with sales report)
+            loan_amount = Decimal(loans_dict.get(date, 0))
 
-            # --- NEW: Calculate gross profit from SaleItems ---
+            # Gross profit from confirmed sales that day (refunded excluded → their margin just drops out, profit stays 0 for them)
             sale_items = SaleItem.objects.filter(
                 sale__date__date=date,
-                sale__in=sales_qs
+                sale__in=sales_qs,
+                sale__status='confirmed',
             ).select_related("product")
 
             gross_profit = sum(
@@ -2048,7 +2072,8 @@ class ShortReportAPIView(APIView):
                 for si in sale_items
             )
 
-            profit = gross_profit - total_discount - total_refunds - total_expenses - loan_amount
+            # Profit = gross margin - discount - expenses - unpaid (loans). No refund subtraction.
+            profit = gross_profit - total_discount - total_expenses - loan_amount
 
             report.append({
                 "date": date.strftime('%Y-%m-%d'),

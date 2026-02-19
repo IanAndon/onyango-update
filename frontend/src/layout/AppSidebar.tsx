@@ -103,7 +103,7 @@ const navItems: NavItem[] = [
     rolesAllowed: ["admin"],
     unitsAllowed: ["workshop"],
   },
-  { group: "administration", name: "Unit Overview", icon: <Building2 size={20} />, path: "/admin/unit-overview", rolesAllowed: ["admin", "owner", "manager"] },
+  { group: "administration", name: "Unit Overview", icon: <Building2 size={20} />, path: "/unit-overview", rolesAllowed: ["admin", "owner", "manager"] },
   { group: "administration", icon: <UserCircleIcon />, name: "Users", path: "/users", rolesAllowed: ["admin"] },
 ];
 
@@ -128,12 +128,12 @@ const AppSidebar: React.FC = () => {
       ) {
         return false;
       }
-      // Shop items (e.g. Approve requests /onyango/shop/material-requests): only for unit "shop" or admin/owner/manager. Workshop cashier must NOT see them.
+      // Shop items (e.g. Approve requests): only for unit "shop" or admin/owner/manager. Workshop cashier must NOT see them.
       const unitOk = !item.unitsAllowed || isCrossUnit || (userUnit && item.unitsAllowed.includes(userUnit));
       if (!unitOk) return false;
+      // Role must be allowed (e.g. Reports are admin-only; don't show for cashier even if unit matches).
       const roleOk = !item.rolesAllowed || item.rolesAllowed.includes(user.role);
-      const unitMatch = userUnit && item.unitsAllowed?.includes(userUnit);
-      return roleOk || unitMatch;
+      return roleOk;
     });
   }, [user?.role, userUnit, isCrossUnit]);
 

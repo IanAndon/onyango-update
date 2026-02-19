@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import api from "@/utils/api";
 
+const MIN_QUANTITY = 0.01;
+
 interface Product {
   id: number;
   name: string;
@@ -15,6 +17,18 @@ interface Product {
 interface Line {
   product: number;
   quantity_requested: number;
+}
+
+function formatStock(value: number): string {
+  if (value == null || Number.isNaN(value)) return "0";
+  const n = Number(value);
+  return n % 1 === 0 ? String(Math.round(n)) : String(n);
+}
+
+function clampQuantity(qty: number, maxStock: number): number {
+  const n = Number(qty);
+  if (Number.isNaN(n) || n < MIN_QUANTITY) return MIN_QUANTITY;
+  return Math.min(Math.max(MIN_QUANTITY, n), maxStock);
 }
 
 interface RepairJobOption {
@@ -34,6 +48,7 @@ export default function NewMaterialRequestPage() {
   const [search, setSearch] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [lines, setLines] = useState<Line[]>([]);
+  const [editingQty, setEditingQty] = useState<Record<number, string>>({});
 
   useEffect(() => {
     api
@@ -84,28 +99,47 @@ export default function NewMaterialRequestPage() {
     [products, search]
   );
 
+  const getStock = (productId: number) => {
+    const p = getProduct(productId);
+    return p != null ? Number(p.quantity_in_stock) : 0;
+  };
+
   const addOrIncrementLine = (productId: number) => {
+    const stock = getStock(productId);
     setLines((prev) => {
       const existing = prev.find((l) => l.product === productId);
       if (existing) {
+        const next = clampQuantity(existing.quantity_requested + 0.25, stock);
         return prev.map((l) =>
-          l.product === productId
-            ? { ...l, quantity_requested: l.quantity_requested + 1 }
-            : l
+          l.product === productId ? { ...l, quantity_requested: next } : l
         );
       }
-      return [...prev, { product: productId, quantity_requested: 1 }];
+      return [...prev, { product: productId, quantity_requested: Math.min(1, stock) >= MIN_QUANTITY ? 1 : MIN_QUANTITY }];
     });
   };
 
   const updateLineQty = (productId: number, qty: number) => {
+    const stock = getStock(productId);
     setLines((prev) =>
       prev.map((l) =>
         l.product === productId
-          ? { ...l, quantity_requested: Math.max(1, qty) }
+          ? { ...l, quantity_requested: clampQuantity(qty, stock) }
           : l
       )
     );
+  };
+
+  const commitQtyInput = (productId: number, raw: string) => {
+    const stock = getStock(productId);
+    const trimmed = raw.trim();
+    const num = trimmed === "" ? NaN : parseFloat(trimmed);
+    const valid = !Number.isNaN(num) && num >= MIN_QUANTITY && num <= stock;
+    updateLineQty(productId, valid ? num : MIN_QUANTITY);
+    setEditingQty((prev) => {
+      const next = { ...prev };
+      delete next[productId];
+      return next;
+    });
   };
 
   const removeLine = (productId: number) => {
@@ -133,14 +167,26 @@ export default function NewMaterialRequestPage() {
       return;
     }
     const valid = lines.filter(
-      (l) => l.product > 0 && l.quantity_requested > 0
+      (l) => l.product > 0 && l.quantity_requested >= MIN_QUANTITY
     );
     if (valid.length === 0) {
       alert("Add at least one material with quantity.");
       return;
     }
+    // Resolve any in-progress quantity edits before validating
+    const resolvedLines = valid.map((l) => {
+      const raw = editingQty[l.product];
+      const qty =
+        raw != null && String(raw).trim() !== ""
+          ? parseFloat(String(raw).trim()) || MIN_QUANTITY
+          : l.quantity_requested;
+      const prod = getProduct(l.product);
+      const stock = prod ? Number(prod.quantity_in_stock) : 0;
+      return { ...l, quantity_requested: clampQuantity(qty, stock) };
+    });
+    setEditingQty({});
     // Prevent submitting with quantities greater than stock
-    const overStock = valid.filter((l) => {
+    const overStock = resolvedLines.filter((l) => {
       const prod = getProduct(l.product);
       if (!prod || prod.quantity_in_stock == null) return false;
       return l.quantity_requested > Number(prod.quantity_in_stock);
@@ -149,7 +195,7 @@ export default function NewMaterialRequestPage() {
       const names = overStock
         .map((l) => {
           const prod = getProduct(l.product);
-          return prod ? `${prod.name} (in stock ${prod.quantity_in_stock}, requested ${l.quantity_requested})` : "";
+          return prod ? `${prod.name} (in stock ${formatStock(Number(prod.quantity_in_stock))}, requested ${formatStock(l.quantity_requested)})` : "";
         })
         .filter(Boolean)
         .join("\n- ");
@@ -165,7 +211,7 @@ export default function NewMaterialRequestPage() {
       await api.post("api/onyango/material-requests/", {
         repair_job: Number(selectedJobId),
         status: "draft",
-        lines: valid.map((l) => ({
+        lines: resolvedLines.map((l) => ({
           product: l.product,
           quantity_requested: l.quantity_requested,
         })),
@@ -291,7 +337,7 @@ export default function NewMaterialRequestPage() {
                       <p className="text-[11px] text-gray-500 dark:text-gray-400">
                         In shop:{" "}
                         <span className="font-semibold">
-                          {p.quantity_in_stock}
+                          {formatStock(Number(p.quantity_in_stock))}
                         </span>
                       </p>
                     </div>
@@ -357,20 +403,36 @@ export default function NewMaterialRequestPage() {
                           </p>
                         </td>
                         <td className="p-1.5 text-center text-gray-700 dark:text-gray-300">
-                          {prod.quantity_in_stock}
+                          {formatStock(Number(prod.quantity_in_stock))}
                         </td>
                         <td className="p-1.5 text-center">
                           <input
-                            type="number"
-                            min={1}
-                            value={line.quantity_requested}
+                            type="text"
+                            inputMode="decimal"
+                            autoComplete="off"
+                            value={editingQty[line.product] ?? formatStock(line.quantity_requested)}
+                            onFocus={() =>
+                              setEditingQty((prev) => ({
+                                ...prev,
+                                [line.product]: formatStock(line.quantity_requested),
+                              }))
+                            }
                             onChange={(e) =>
-                              updateLineQty(
+                              setEditingQty((prev) => ({
+                                ...prev,
+                                [line.product]: e.target.value,
+                              }))
+                            }
+                            onBlur={() =>
+                              commitQtyInput(
                                 line.product,
-                                parseInt(e.target.value, 10) || 1
+                                editingQty[line.product] ?? ""
                               )
                             }
-                            className="w-16 rounded-md border border-gray-300 bg-white px-1.5 py-1 text-center text-[11px] dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                            }}
+                            className="w-16 min-w-0 rounded-md border border-gray-300 bg-white px-1.5 py-1 text-center text-[11px] dark:border-gray-700 dark:bg-gray-900 dark:text-white"
                           />
                         </td>
                         <td className="p-1.5 text-right text-gray-700 dark:text-gray-300">

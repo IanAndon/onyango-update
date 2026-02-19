@@ -1,3 +1,4 @@
+from decimal import Decimal
 from django.utils import timezone
 from django.contrib.auth.models import AbstractUser
 from django.db import models, transaction
@@ -92,7 +93,7 @@ class Product(models.Model):
     buying_price = models.DecimalField(max_digits=20, decimal_places=2)
     selling_price = models.DecimalField(max_digits=20, decimal_places=2)
     wholesale_price = models.DecimalField(max_digits=20, decimal_places=2, default=0)
-    quantity_in_stock = models.IntegerField(default=0)
+    quantity_in_stock = models.DecimalField(max_digits=20, decimal_places=2, default=0)
     threshold = models.IntegerField(default=5, help_text="Minimum quantity before stock is considered low.")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -102,24 +103,26 @@ class Product(models.Model):
         return self.name
 
     def add_stock(self, quantity, user):
-        self.quantity_in_stock += quantity
+        qty = Decimal(str(quantity))
+        self.quantity_in_stock += qty
         self.save()
         StockEntry.objects.create(
             product=self,
             entry_type='in',
-            quantity=quantity,
+            quantity=qty,
             recorded_by=user
         )
 
     def remove_stock(self, quantity, user):
-        if self.quantity_in_stock < quantity:
+        qty = Decimal(str(quantity))
+        if self.quantity_in_stock < qty:
             raise ValueError("Not enough stock available.")
-        self.quantity_in_stock -= quantity
+        self.quantity_in_stock -= qty
         self.save()
         StockEntry.objects.create(
             product=self,
             entry_type='sold',
-            quantity=quantity,
+            quantity=qty,
             recorded_by=user
         )
 
@@ -127,7 +130,7 @@ class Product(models.Model):
         is_new = self.pk is None
         initial_quantity = self.quantity_in_stock
         super().save(*args, **kwargs)
-        if is_new and initial_quantity > 0 and self._created_by:
+        if is_new and (initial_quantity or 0) > 0 and self._created_by:
             StockEntry.objects.create(
                 product=self,
                 entry_type='added',
@@ -153,7 +156,7 @@ class StockEntry(models.Model):
     )
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
     entry_type = models.CharField(max_length=24, choices=ENTRY_TYPE_CHOICES)
-    quantity = models.PositiveIntegerField()
+    quantity = models.DecimalField(max_digits=20, decimal_places=2, default=0)
     date = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     recorded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
@@ -199,7 +202,8 @@ class Order(models.Model):
 
         with transaction.atomic():
             total_amount = sum(
-                item.product.selling_price * item.quantity for item in self.items.all()
+                item.product.selling_price * get_effective_quantity(item.quantity, getattr(item, 'portion', 'full'))
+                for item in self.items.all()
             )
 
             # ⬇️ Sale uses order discount
@@ -215,14 +219,18 @@ class Order(models.Model):
             )
 
             for item in self.items.all():
+                portion = getattr(item, 'portion', 'full')
+                effective_qty = get_effective_quantity(item.quantity, portion)
+                line_total = item.product.selling_price * effective_qty
                 SaleItem.objects.create(
                     sale=sale,
                     product=item.product,
-                    quantity=item.quantity,
+                    quantity=effective_qty,
                     price_per_unit=item.product.selling_price,
-                    total_price=item.product.selling_price * item.quantity,
+                    total_price=line_total,
+                    portion=portion,
                 )
-                item.product.remove_stock(item.quantity, cashier_user)
+                item.product.remove_stock(effective_qty, cashier_user)
 
             self.status = 'confirmed'
             self.save()
@@ -230,11 +238,37 @@ class Order(models.Model):
             return sale
 
 
+PORTION_CHOICES = [
+    ('full', 'Full'),
+    ('half', 'Half'),
+    ('quarter', 'Quarter'),
+]
+
+PORTION_FACTOR = {'full': Decimal('1'), 'half': Decimal('0.5'), 'quarter': Decimal('0.25')}
+
+# Extra amount added to whole quantity: "1 and half" = 1 + 0.5, "2 and quarter" = 2 + 0.25
+PORTION_EXTRA = {'full': Decimal('0'), 'half': Decimal('0.5'), 'quarter': Decimal('0.25')}
+
+
+def get_portion_factor(portion):
+    return PORTION_FACTOR.get(portion or 'full', Decimal('1'))
+
+
+def get_portion_extra(portion):
+    return PORTION_EXTRA.get(portion or 'full', Decimal('0'))
+
+
+def get_effective_quantity(whole_quantity, portion):
+    """Effective quantity for pricing: e.g. 2 + quarter -> 2.25, 1 + half -> 1.5."""
+    return Decimal(whole_quantity) + get_portion_extra(portion)
+
+
 class OrderItem(models.Model):
     order = models.ForeignKey(Order, related_name='items', on_delete=models.CASCADE)
     product = models.ForeignKey(Product, on_delete=models.SET_NULL, null=True)
     quantity = models.PositiveIntegerField()
     unit_price = models.DecimalField(max_digits=20, decimal_places=2, default=0)
+    portion = models.CharField(max_length=10, choices=PORTION_CHOICES, default='full')
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
 
@@ -327,9 +361,10 @@ class Sale(models.Model):
 class SaleItem(models.Model):
     sale = models.ForeignKey(Sale, related_name='items', on_delete=models.CASCADE)
     product = models.ForeignKey(Product, on_delete=models.SET_NULL, null=True)
-    quantity = models.PositiveIntegerField()
+    quantity = models.DecimalField(max_digits=20, decimal_places=2, default=1)  # effective qty e.g. 1.5, 2.25
     price_per_unit = models.DecimalField(max_digits=20, decimal_places=2)
     total_price = models.DecimalField(max_digits=20, decimal_places=2)
+    portion = models.CharField(max_length=10, choices=PORTION_CHOICES, default='full')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -372,18 +407,23 @@ class Refund(models.Model):
         # Auto set refund amount to the paid amount of the sale
         self.total_refund_amount = self.sale.paid_amount
         super().save(*args, **kwargs)
-        # Update sale status
+        # Update sale status and refund total (once)
         self.sale.status = 'refunded'
         self.sale.payment_status = 'refunded'
         self.sale.refund_total = (self.sale.refund_total or 0) + self.total_refund_amount
         self.sale.save()
-        # Log reverse payment
+        # Log reverse payment (single negative payment)
         Payment.objects.create(
             sale=self.sale,
             amount_paid=-self.total_refund_amount,
             cashier=self.refunded_by,
             payment_method="refund"
         )
+        self.sale.update_paid_amount()
+        # Return items to stock
+        for item in self.sale.items.select_related("product").all():
+            if item.product:
+                item.product.add_stock(item.quantity, self.refunded_by)
 
     def __str__(self):
         return f"Refund #{self.id} for Sale #{self.sale.id}"

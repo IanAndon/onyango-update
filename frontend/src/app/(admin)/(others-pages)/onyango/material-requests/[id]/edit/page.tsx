@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import api from "@/utils/api";
 
+const MIN_QUANTITY = 0.01;
+
 interface Product {
   id: number;
   name: string;
@@ -15,6 +17,18 @@ interface Product {
 interface Line {
   product: number;
   quantity_requested: number;
+}
+
+function formatStock(value: number): string {
+  if (value == null || Number.isNaN(value)) return "0";
+  const n = Number(value);
+  return n % 1 === 0 ? String(Math.round(n)) : String(n);
+}
+
+function clampQuantity(qty: number, maxStock: number): number {
+  const n = Number(qty);
+  if (Number.isNaN(n) || n < MIN_QUANTITY) return MIN_QUANTITY;
+  return Math.min(Math.max(MIN_QUANTITY, n), maxStock);
 }
 
 interface RepairJobOption {
@@ -46,6 +60,7 @@ export default function EditMaterialRequestPage() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [editingQty, setEditingQty] = useState<Record<number, string>>({});
 
   useEffect(() => {
     if (!id) return;
@@ -70,7 +85,7 @@ export default function EditMaterialRequestPage() {
         setJobs(jobList as RepairJobOption[]);
         const r = mr as MaterialRequest;
         setSelectedJobId(r.repair_job ?? r.repair_job_id ?? "");
-        setLines((r.lines ?? []).map((l) => ({ product: l.product, quantity_requested: l.quantity_requested })));
+        setLines((r.lines ?? []).map((l) => ({ product: l.product, quantity_requested: Number(l.quantity_requested) || MIN_QUANTITY })));
         setNotes(r.notes ?? "");
       })
       .catch(() => setRequest(null))
@@ -84,24 +99,41 @@ export default function EditMaterialRequestPage() {
 
   const getProduct = (productId: number) => products.find((p) => p.id === productId);
 
+  const getStock = (productId: number) => {
+    const p = getProduct(productId);
+    return p != null ? Number(p.quantity_in_stock) : 0;
+  };
+
   const addOrIncrementLine = (productId: number) => {
+    const stock = getStock(productId);
     setLines((prev) => {
       const existing = prev.find((l) => l.product === productId);
       if (existing) {
-        return prev.map((l) =>
-          l.product === productId ? { ...l, quantity_requested: l.quantity_requested + 1 } : l
-        );
+        const next = clampQuantity(existing.quantity_requested + 0.25, stock);
+        return prev.map((l) => (l.product === productId ? { ...l, quantity_requested: next } : l));
       }
-      return [...prev, { product: productId, quantity_requested: 1 }];
+      return [...prev, { product: productId, quantity_requested: Math.min(1, stock) >= MIN_QUANTITY ? 1 : MIN_QUANTITY }];
     });
   };
 
   const updateLineQty = (productId: number, qty: number) => {
+    const stock = getStock(productId);
     setLines((prev) =>
-      prev.map((l) =>
-        l.product === productId ? { ...l, quantity_requested: Math.max(1, qty) } : l
-      )
+      prev.map((l) => (l.product === productId ? { ...l, quantity_requested: clampQuantity(qty, stock) } : l))
     );
+  };
+
+  const commitQtyInput = (productId: number, raw: string) => {
+    const stock = getStock(productId);
+    const trimmed = raw.trim();
+    const num = trimmed === "" ? NaN : parseFloat(trimmed);
+    const valid = !Number.isNaN(num) && num >= MIN_QUANTITY && num <= stock;
+    updateLineQty(productId, valid ? num : MIN_QUANTITY);
+    setEditingQty((prev) => {
+      const next = { ...prev };
+      delete next[productId];
+      return next;
+    });
   };
 
   const removeLine = (productId: number) => {
@@ -121,20 +153,27 @@ export default function EditMaterialRequestPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!request) return;
-    const valid = lines.filter((l) => l.product > 0 && l.quantity_requested > 0);
+    const valid = lines.filter((l) => l.product > 0 && l.quantity_requested >= MIN_QUANTITY);
     if (valid.length === 0) {
       alert("Add at least one material with quantity.");
       return;
     }
-    
-    // Client-side stock validation for approved requests
+    const resolvedLines = valid.map((l) => {
+      const raw = editingQty[l.product];
+      const qty = raw != null && String(raw).trim() !== "" ? parseFloat(String(raw).trim()) || MIN_QUANTITY : l.quantity_requested;
+      const prod = getProduct(l.product);
+      const stock = prod ? Number(prod.quantity_in_stock) : 0;
+      return { ...l, quantity_requested: clampQuantity(qty, stock) };
+    });
+    setEditingQty({});
+
     const status = (request.status ?? "").toString().toLowerCase();
     if (status === "approved" || status === "submitted") {
       const insufficient: string[] = [];
-      for (const line of valid) {
+      for (const line of resolvedLines) {
         const prod = getProduct(line.product);
-        if (prod && prod.quantity_in_stock !== null && line.quantity_requested > prod.quantity_in_stock) {
-          insufficient.push(`${prod.name} (in stock ${prod.quantity_in_stock}, requested ${line.quantity_requested})`);
+        if (prod && prod.quantity_in_stock != null && line.quantity_requested > Number(prod.quantity_in_stock)) {
+          insufficient.push(`${prod.name} (in stock ${formatStock(Number(prod.quantity_in_stock))}, requested ${formatStock(line.quantity_requested)})`);
         }
       }
       if (insufficient.length > 0) {
@@ -152,7 +191,7 @@ export default function EditMaterialRequestPage() {
       await api.patch(`api/onyango/material-requests/${request.id}/`, {
         repair_job: selectedJobId ? Number(selectedJobId) : null,
         notes: notes.trim() || null,
-        lines: valid.map((l) => ({ product: l.product, quantity_requested: l.quantity_requested })),
+        lines: resolvedLines.map((l) => ({ product: l.product, quantity_requested: l.quantity_requested })),
       });
       const successMsg =
         status === "approved"
@@ -270,7 +309,7 @@ export default function EditMaterialRequestPage() {
                 >
                   <span className="truncate font-medium text-gray-900 dark:text-white">{p.name}</span>
                   <span className="rounded-full bg-brand-500/10 px-2 py-0.5 text-[11px] font-semibold text-brand-600 dark:text-brand-300">
-                    {existing ? `Qty ${existing.quantity_requested}` : "Add"}
+                    {existing ? `Qty ${formatStock(existing.quantity_requested)}` : "Add"}
                   </span>
                 </button>
               );
@@ -301,11 +340,15 @@ export default function EditMaterialRequestPage() {
                         <td className="p-1.5 font-medium text-gray-900 dark:text-white">{prod.name}</td>
                         <td className="p-1.5 text-center">
                           <input
-                            type="number"
-                            min={1}
-                            value={line.quantity_requested}
-                            onChange={(e) => updateLineQty(line.product, parseInt(e.target.value, 10) || 1)}
-                            className="w-14 rounded border border-gray-300 px-1.5 py-1 text-center text-[11px] dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                            type="text"
+                            inputMode="decimal"
+                            autoComplete="off"
+                            value={editingQty[line.product] ?? formatStock(line.quantity_requested)}
+                            onFocus={() => setEditingQty((prev) => ({ ...prev, [line.product]: formatStock(line.quantity_requested) }))}
+                            onChange={(e) => setEditingQty((prev) => ({ ...prev, [line.product]: e.target.value }))}
+                            onBlur={() => commitQtyInput(line.product, editingQty[line.product] ?? "")}
+                            onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                            className="w-14 min-w-0 rounded border border-gray-300 px-1.5 py-1 text-center text-[11px] dark:border-gray-700 dark:bg-gray-800 dark:text-white"
                           />
                         </td>
                         <td className="p-1.5 text-right">

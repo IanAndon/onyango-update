@@ -259,7 +259,7 @@ class MaterialRequest(models.Model):
 class MaterialRequestLine(models.Model):
     request = models.ForeignKey(MaterialRequest, on_delete=models.CASCADE, related_name='lines')
     product = models.ForeignKey('main.Product', on_delete=models.CASCADE)
-    quantity_requested = models.PositiveIntegerField()
+    quantity_requested = models.DecimalField(max_digits=20, decimal_places=2, default=1)
 
     def __str__(self):
         return f"{self.product.name} x {self.quantity_requested}"
